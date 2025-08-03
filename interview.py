@@ -1,30 +1,45 @@
 import pandas as pd
 import numpy as np
 import warnings
+from visualize_returns import plot_equity_curve, plot_total_return_bar
+
+SAVETO = "results"
 
 """
-Your task is to extend this signal generation framework. You will start with a basic system that generates one simple signal (Momentum). Your goal is to add new, more sophisticated signals and analyze their performance.
+Your task is to extend this signal generation framework. You will start with a basic system that generates one simple signal (Momentum). 
+Your goal is to add new, more sophisticated signals and analyze their performance.
 
 Overall outline:
 
-1. Familiarize yourself with the code and understand the structure of the Config, Performance, SignalFactory, and Backtester classes. As an overview, the Config class centralizes all key parameters, such as file paths, 
-the annualization factor for metrics, and backtest settings, making the system easy to reconfigure. The Performance class contains all the formulas to calculate standard financial metrics like the Sharpe, Sortino, and 
+1. Familiarize yourself with the code and understand the structure of the Config, Performance, SignalFactory, and Backtester classes. 
+As an overview, the Config class centralizes all key parameters, such as file paths, 
+the annualization factor for metrics, and backtest settings, making the system easy to reconfigure. 
+The Performance class contains all the formulas to calculate standard financial metrics like the Sharpe, Sortino, and 
 Calmar ratios, which are used to judge a strategy's risk-adjusted return.
-The SignalFactory is the core of the framework and takes in the raw price data and generated various trading signals (represented as -1 for short, 0 for neutral, and 1 for long). You will add your own signal-generating logic here. 
-Finally, the Backtester class is the engine that takes the generated signals and the price series, calculates the hypothetical returns of each strategy, and uses the Performance class to create a final report and signal ranking.
+The SignalFactory is the core of the framework and takes in the raw price data and generated various trading signals 
+(represented as -1 for short, 0 for neutral, and 1 for long). You will add your own signal-generating logic here. 
+Finally, the Backtester class is the engine that takes the generated signals and the price series, calculates the 
+hypothetical returns of each strategy, and uses the Performance class to create a final report and signal ranking.
 
-2. Add New Signals: In the SignalFactory class, you will find a TODO section. Your primary task is to implement at least five new signal generation methods. For example, you can consider signals based on moving averages, 
-cross asset relationships, or any other idea that you can come up with. This is purposefully left as open ended as possible. We want to see your creativity here in the signal development stage. To integrate your signals, 
+2. Add New Signals: In the SignalFactory class, you will find a TODO section. Your primary task is to implement at 
+least five new signal generation methods. For example, you can consider signals based on moving averages, 
+cross asset relationships, or any other idea that you can come up with. This is purposefully left as open ended as 
+possible. We want to see your creativity here in the signal development stage. To integrate your signals, 
 define them in the SignalFactory class and then add them to the buid function so they are included in the backtest.
-    - Right now, signals are simply tested over the entire dataset. As a further extension if you wish to pursue it, splitting the signal generation into train and test splits may be helpful to see if your signals generalize.
+    - Right now, signals are simply tested over the entire dataset. As a further extension if you wish to pursue it, 
+    splitting the signal generation into train and test splits may be helpful to see if your signals generalize.
     (Do the top signals in the first period still do well out of sample?)
 
-3. Run the script and analyze the results. The output CSV file will contain the performance metrics for all signals, including the ones you created. 
+3. Run the script and analyze the results. The output CSV file will contain the performance metrics for all signals, 
+including the ones you created. 
     - Analyze these results and discuss any interesting findings or areas of research
-    - See how these signals could be combined to form a strong trading strategy. You can implement this using code or provide a written explanation and high-level overview.
+    - See how these signals could be combined to form a strong trading strategy. You can implement this using code 
+    or provide a written explanation and high-level overview.
 
-4. (Optional) Enhance the Framework: For an even more rigorous submission, feel free to improve the framework following conventional computer science principles. There may be optimizations 
-(vectorization of computations, parallelization, class refactoring, modularization) that you could make to the code to enhance its robustness. Additionally, this code may have some suboptimal implementation details, 
+4. (Optional) Enhance the Framework: For an even more rigorous submission, feel free to improve the framework following 
+conventional computer science principles. There may be optimizations 
+(vectorization of computations, parallelization, class refactoring, modularization) that you could make to the code to 
+enhance its robustness. Additionally, this code may have some suboptimal implementation details, 
 that while technically correct, aren't fully robust and could be improved. 
 """
 
@@ -35,7 +50,7 @@ class Config:
     """
     # Path to the input CSV file. The file should have a 'date' column
     # and at least one price column (e.g., 'close').
-    csv_path: str = "ES.csv"
+    csv_path: str = "ES (1).csv"
 
     # Path to write the final performance analysis CSV.
     output_path: str = "candidate_signal_analysis.csv"
@@ -307,6 +322,24 @@ if __name__ == "__main__":
             print(f"\nFull performance report saved to: {cfg.output_path}")
         else:
             print("No performance report generated.")
+        #plot returns
+        # Assume performance_report, backtester are available:
+
+        # 1) Bar chart of top 10 total returns
+        plot_total_return_bar(performance_report, saveto=SAVETO, top_n=10)
+
+        # 2) Equity curve of the best single signal
+        best = performance_report.iloc[0]["signal_name"]
+        plot_equity_curve(backtester.signals_df, 
+                        backtester.returns, saveto=SAVETO,
+                        signal_name=best)
+
+        # 3) Equity curve of an equal-weighted portfolio of top 5
+        top5 = performance_report.head(5)["signal_name"].tolist()
+        plot_equity_curve(backtester.signals_df, 
+                        backtester.returns, saveto=SAVETO,
+                        signal_name=top5)
+
 
     except FileNotFoundError:
         print(f"ERROR: The data file was not found at '{cfg.csv_path}'.")
