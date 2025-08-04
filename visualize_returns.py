@@ -3,13 +3,13 @@ import pandas as pd
 import os
 import datetime as dt
 
-def _unique_filepath(directory: str, basename: str, ext: str = ".png"):
+def unique_filepath(directory: str, basename: str, ext: str = ".png"):
     """
     Helper to generate a filepath that won’t overwrite:
       directory/basename_YYYYmmdd_HHMMSS.ext
     """
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{basename}_{ts}{ext}"
+    filename = f"{ts}_{basename}{ext}"
     return os.path.join(directory, filename)
 
 def plot_total_return_bar(perf_df, saveto, top_n=10, figsize=(8,4)):
@@ -28,7 +28,7 @@ def plot_total_return_bar(perf_df, saveto, top_n=10, figsize=(8,4)):
     plt.title(f'Top {top_n} Signals by Total Return')
     plt.gca().invert_yaxis()
     plt.tight_layout()
-    path = _unique_filepath(saveto, "top_returns", ".png")
+    path = unique_filepath(saveto, "top_returns", ".png")
     plt.savefig(path)
     plt.show()
 
@@ -65,12 +65,12 @@ def plot_equity_curve(signals_df, returns, saveto, signal_name=None, figsize=(10
 
     plt.figure(figsize=figsize)
     plt.plot(equity.index, equity, lw=2, label=label)
-    plt.title(f'Equity Curve: {label} (×{equity.iloc[-1]:.2f})')
+    plt.title(f'Equity Curve: {label} (x{equity.iloc[-1]:.2f})')
     plt.xlabel('Date')
     plt.ylabel('Growth of $1')
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    path = _unique_filepath(saveto, base, ".png")
+    path = unique_filepath(saveto, base, ".png")
     plt.savefig(path)
     plt.show()

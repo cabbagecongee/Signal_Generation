@@ -147,8 +147,7 @@ class SignalFactory:
             self.df.set_index(self.df.columns[0], inplace=True)
         
         # Isolate the price data to be used for signal generation
-        # self.prices_df = self.df.iloc[:, 1:] # Use all columns except the original date column if it was present
-        self.prices_df = self.df[['open','high','low','close']]
+        self.prices_df = self.df.iloc[:, 1:] # Use all columns except the original date column if it was present
         self.returns = self.prices_df.pct_change()
 
     # =========================================================================================
@@ -178,27 +177,6 @@ class SignalFactory:
             parts.append(dfm)
         return pd.concat(parts, axis=1)
 
-    def voted_momentum(self) -> pd.DataFrame:
-        """
-        Ensemble momentum: majority vote across selected lookbacks.
-        """
-        lookbacks = [5, 10, 15, 20]
-        parts = []
-        for col in self.prices_df.columns:
-            votes = []
-            for m in lookbacks:
-                sig = (self.prices_df[col] > self.prices_df[col].shift(m)).astype(int) * 2 - 1
-                votes.append(sig)
-            vote_df = pd.concat(votes, axis=1)
-            maj = vote_df.sum(axis=1)
-            # if majority positive, long; majority negative, short; else flat
-            sig_final = pd.Series(0, index=vote_df.index)
-            sig_final[maj > 0] = 1
-            sig_final[maj < 0] = -1
-            sig_final.name = f"VOTEMOM|{col}|{'_'.join(map(str, lookbacks))}"
-            parts.append(sig_final)
-        return pd.concat(parts, axis=1)
-    
     def moving_average_crossover(self) -> pd.DataFrame:
         """
         Signal 1: Generates signals from fast/slow moving average crossovers.
@@ -208,7 +186,6 @@ class SignalFactory:
         parts = []
         fast_windows = [5, 10, 20]
         slow_windows = [50, 100, 150]
-        print(self.prices_df.columns.tolist())
         
         for price_col in ['close', 'open']:
             price_series = self.prices_df[price_col]
@@ -225,79 +202,101 @@ class SignalFactory:
                 df_signal = signal.to_frame(name=f"SMA_CROSS|{price_col}|{fast}|{slow}")
                 parts.append(df_signal)
         return pd.concat(parts, axis=1)
-    
-    def trend_filtered_momentum(self) -> pd.DataFrame:
-        """
-        Signal 8: A 'smart' momentum signal that uses ADX as a trend strength filter.
-        Only takes momentum signals if ADX indicates a strong trend is active.
-        """
-        parts = []
-        adx_period = 14
-        adx_threshold = 20 # Common threshold for trend strength
-        mom_period = 17 # Use the best momentum period you found
-        
-        # Calculate ADX
-        high, low, close = self.df['high'], self.df['low'], self.df['close']
-        plus_dm = high.diff()
-        minus_dm = low.diff()
-        plus_dm[(plus_dm < 0) | (plus_dm <= minus_dm)] = 0
-        minus_dm[(minus_dm < 0) | (minus_dm <= plus_dm)] = 0
-        
-        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
-        atr = tr.ewm(alpha=1/adx_period, adjust=False).mean()
-        
-        plus_di = 100 * plus_dm.ewm(alpha=1/adx_period, adjust=False).mean() / atr
-        minus_di = 100 * minus_dm.ewm(alpha=1/adx_period, adjust=False).mean() / atr
-        
-        dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
-        adx = dx.ewm(alpha=1/adx_period, adjust=False).mean()
 
-        # Base Momentum Signal
-        momentum_signal = (self.prices_df['close'] > self.prices_df['close'].shift(mom_period)).astype(int) * 2 - 1
-        
-        # Apply Filter
-        is_trending = adx > adx_threshold
-        filtered_signal = momentum_signal.where(is_trending, 0) # Apply signal only when trending, else neutral
-
-        return filtered_signal.to_frame(name=f"ADX_FILTERED_MOM|{mom_period}|{adx_threshold}")
-    
-    def volatility_normalized_momentum(self) -> pd.DataFrame:
+    def rsi_reversion(self) -> pd.DataFrame:
         """
-        Signal 9: A more robust momentum signal normalized by volatility (ATR).
-        Calculates a z-score of the price move to adapt to market conditions.
+        Signal 2: Generates mean-reversion signals from the Relative Strength Index (RSI).
+        A long signal (1) is generated when the asset is 'oversold' (RSI < lower_thresh).
+        A short signal (-1) is generated when the asset is 'overbought' (RSI > upper_thresh).
         """
         parts = []
-        # Test lookback periods around the one that has proven successful
-        lookback_windows = [15, 17, 20, 25]
-        # Thresholds for the z-score to trigger a signal
-        z_thresholds = [0.5, 1.0, 1.5]
+        periods = [14, 21, 30]
+        thresholds = [(70, 30), (80, 20)]
 
-        # Calculate ATR
-        high, low, close = self.df['high'], self.df['low'], self.df['close']
-        tr1 = high - low
-        tr2 = abs(high - close.shift())
-        tr3 = abs(low - close.shift())
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        price_series = self.prices_df['close']
+        delta = price_series.diff()
+        
+        for period, (upper_thresh, lower_thresh) in product(periods, thresholds):
+            gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+            loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
 
-        for n, z in product(lookback_windows, z_thresholds):
-            atr = tr.ewm(span=n, adjust=False).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
             
-            # Calculate raw momentum
-            momentum = close.diff(n)
+            signal = pd.Series(0, index=self.prices_df.index)
+            signal[rsi > upper_thresh] = -1 # Short when overbought
+            signal[rsi < lower_thresh] = 1  # Long when oversold
             
-            # Normalize momentum by ATR to get the z-score
-            # We add a small epsilon to ATR to prevent division by zero in flat markets
-            momentum_z_score = momentum / (atr + 1e-9) 
-            
-            signal = pd.Series(0, index=self.df.index)
-            signal[momentum_z_score > z] = 1
-            signal[momentum_z_score < -z] = -1
-            
-            df_signal = signal.to_frame(name=f"VOL_NORM_MOM|{n}|{z}")
+            df_signal = signal.to_frame(name=f"RSI|{period}|{upper_thresh}|{lower_thresh}")
             parts.append(df_signal)
-            
         return pd.concat(parts, axis=1)
 
+    def bollinger_band_reversion(self) -> pd.DataFrame:
+        """
+        Signal 3: Generates mean-reversion signals from Bollinger Bands.
+        A long signal (1) is generated when the price touches or crosses below the lower band.
+        A short signal (-1) is generated when the price touches or crosses above the upper band.
+        """
+        parts = []
+        periods = [20, 50]
+        std_devs = [2.0, 2.5]
+        price_series = self.prices_df['close']
+
+        for period, std in product(periods, std_devs):
+            middle_band = price_series.rolling(window=period).mean()
+            rolling_std = price_series.rolling(window=period).std()
+            
+            upper_band = middle_band + (rolling_std * std)
+            lower_band = middle_band - (rolling_std * std)
+            
+            signal = pd.Series(0, index=self.prices_df.index)
+            signal[price_series > upper_band] = -1 # Short on breach of upper band
+            signal[price_series < lower_band] = 1  # Long on breach of lower band
+            
+            df_signal = signal.to_frame(name=f"BB|{period}|{std}")
+            parts.append(df_signal)
+        return pd.concat(parts, axis=1)
+
+    def roc_crossover(self) -> pd.DataFrame:
+        """
+        Signal 4: Generates momentum signals from the Rate of Change (ROC) indicator.
+        A long signal (1) is generated when ROC crosses above zero.
+        A short signal (-1) is generated when ROC crosses below zero.
+        """
+        parts = []
+        periods = [10, 20, 30]
+        price_series = self.prices_df['close']
+
+        for p in periods:
+            roc = (price_series - price_series.shift(p)) / price_series.shift(p)
+            
+            signal = pd.Series(0, index=self.prices_df.index)
+            signal[roc > 0] = 1
+            signal[roc < 0] = -1
+            
+            df_signal = signal.to_frame(name=f"ROC|{p}")
+            parts.append(df_signal)
+        return pd.concat(parts, axis=1)
+
+    def engulfing_pattern(self) -> pd.DataFrame:
+        """
+        Signal 5: Generates signals from Bullish and Bearish Engulfing candlestick patterns.
+        This signal uses OHLC data directly.
+        """
+        o, h, l, c = self.df['open'], self.df['high'], self.df['low'], self.df['close']
+        prev_o, prev_c = o.shift(1), c.shift(1)
+        
+        # Bullish Engulfing: Current green candle body engulfs previous red candle body
+        bullish = (c > o) & (prev_o > prev_c) & (c > prev_o) & (o < prev_c)
+        
+        # Bearish Engulfing: Current red candle body engulfs previous green candle body
+        bearish = (o > c) & (prev_c > prev_o) & (o > prev_c) & (c < prev_o)
+        
+        signal = pd.Series(0, index=self.df.index)
+        signal[bullish] = 1
+        signal[bearish] = -1
+        
+        return signal.to_frame(name="ENGULFING_PATTERN")
 
     def build(self) -> pd.DataFrame:
         """
@@ -310,11 +309,12 @@ class SignalFactory:
         # signal_list = [self.momentum(), my_new_signal]
         
         signal_list = [
-            self.voted_momentum(),
             self.momentum(),
-            self.trend_filtered_momentum(),
             self.moving_average_crossover(),
-            self.volatility_normalized_momentum()
+            self.rsi_reversion(),
+            self.bollinger_band_reversion(),
+            self.roc_crossover(),
+            self.engulfing_pattern()
         ]
         
         # Combine all signals into one DataFrame
@@ -327,6 +327,7 @@ class SignalFactory:
         all_signals = all_signals.shift(1).dropna()
         
         return all_signals.astype('int8')
+
 
 # ───────────── Backtester ─────────────
 class Backtester:
