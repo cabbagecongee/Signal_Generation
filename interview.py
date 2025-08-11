@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import warnings
 from visualize_returns import plot_equity_curve, plot_total_return_bar, unique_filepath
+from statsmodels.tsa.arima.model import ARIMA
 from itertools import product
 
 SAVETO = "results"
@@ -52,6 +53,8 @@ class Config:
     # Path to the input CSV file. The file should have a 'date' column
     # and at least one price column (e.g., 'close').
     csv_path: str = "ES (1).csv"
+    # csv_path: str = "CL_Full_OHLC.csv"
+    # csv_path: str = "Gold_Full_OHLC.csv"
 
     # Path to write the final performance analysis CSV.
     output_path: str = "candidate_signal_analysis.csv"
@@ -233,10 +236,9 @@ class SignalFactory:
         """
         parts = []
         adx_period = 14
-        adx_threshold = 20 # Common threshold for trend strength
-        mom_period = 17 # Use the best momentum period you found
+        adx_threshold = 20 
+        mom_period = 17 
         
-        # Calculate ADX
         high, low, close = self.df['high'], self.df['low'], self.df['close']
         plus_dm = high.diff()
         minus_dm = low.diff()
@@ -252,7 +254,6 @@ class SignalFactory:
         dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
         adx = dx.ewm(alpha=1/adx_period, adjust=False).mean()
 
-        # Base Momentum Signal
         momentum_signal = (self.prices_df['close'] > self.prices_df['close'].shift(mom_period)).astype(int) * 2 - 1
         
         # Apply Filter
@@ -267,9 +268,7 @@ class SignalFactory:
         Calculates a z-score of the price move to adapt to market conditions.
         """
         parts = []
-        # Test lookback periods around the one that has proven successful
         lookback_windows = [15, 17, 20, 25]
-        # Thresholds for the z-score to trigger a signal
         z_thresholds = [0.5, 1.0, 1.5]
 
         # Calculate ATR
@@ -297,6 +296,60 @@ class SignalFactory:
             parts.append(df_signal)
             
         return pd.concat(parts, axis=1)
+    
+    def relative_strength_index(self) -> pd.DataFrame:
+        """
+        Signal 2: Generates signals from the Relative Strength Index (RSI).
+        A long signal (1) is generated when RSI crosses below the oversold threshold.
+        A short signal (-1) is generated when RSI crosses above the overbought threshold.
+        """
+        parts = []
+        periods = [5, 10, 14, 21, 28] 
+        oversold_threshold = 30
+        overbought_threshold = 70
+        
+        close_price = self.prices_df['close']
+        
+        for period in periods:
+            delta = close_price.diff()
+            
+            gain = delta.where(delta > 0, 0).ewm(span=period, adjust=False).mean()
+            loss = -delta.where(delta < 0, 0).ewm(span=period, adjust=False).mean()
+            
+            rs = gain / (loss + 1e-9) 
+            rsi = 100 - (100 / (1 + rs))
+            
+            signal = pd.Series(0, index=self.prices_df.index)
+            signal[rsi < oversold_threshold] = 1   # Buy when oversold
+            signal[rsi > overbought_threshold] = -1 # Sell when overbought
+            
+            df_signal = signal.to_frame(name=f"RSI|{period}|{overbought_threshold}|{oversold_threshold}")
+            parts.append(df_signal)
+            
+        return pd.concat(parts, axis=1)
+    
+    def ma_crossover_with_atr_filter(self) -> pd.DataFrame:
+        """
+        Signal: MA Crossover that only fires if the fast MA crosses the slow MA
+        by a certain ATR-based threshold, creating a neutral band.
+        """
+        fast_ma = self.prices_df['close'].rolling(window=20).mean()
+        slow_ma = self.prices_df['close'].rolling(window=50).mean()
+
+        # Calculate ATR
+        high, low, close = self.df['high'], self.df['low'], self.df['close']
+        tr = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
+        atr = tr.ewm(span=14, adjust=False).mean()
+
+        # Create the neutral zone using the ATR
+        upper_band = slow_ma + (0.5 * atr) # Use 0.5 as the multiplier
+        lower_band = slow_ma - (0.5 * atr)
+
+        signal = pd.Series(0, index=self.prices_df.index) # Default to Neutral
+        signal[fast_ma > upper_band] = 1
+        signal[fast_ma < lower_band] = -1
+
+        return signal.to_frame(name=f"SMA_CROSS_ATRFILTER|20|50|0.5")
 
 
     def build(self) -> pd.DataFrame:
@@ -314,7 +367,9 @@ class SignalFactory:
             self.momentum(),
             self.trend_filtered_momentum(),
             self.moving_average_crossover(),
-            self.volatility_normalized_momentum()
+            self.volatility_normalized_momentum(),
+            self.relative_strength_index(),
+            self.ma_crossover_with_atr_filter()
         ]
         
         # Combine all signals into one DataFrame
@@ -327,6 +382,7 @@ class SignalFactory:
         all_signals = all_signals.shift(1).dropna()
         
         return all_signals.astype('int8')
+
 
 # ───────────── Backtester ─────────────
 class Backtester:
@@ -356,6 +412,8 @@ class Backtester:
         # Remove the first row which has a 0 return from pct_change()
         self.signals_df = self.signals_df.iloc[1:]
         self.returns = self.returns[1:]
+
+    
 
 
     def run_full_period_analysis(self) -> pd.DataFrame:
